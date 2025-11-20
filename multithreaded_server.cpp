@@ -1,6 +1,8 @@
 #include <iostream>
 #include <unistd.h>
-#include <string.h>
+#include <cstring>
+#include <string>
+#include <unordered_map>
 
 // libraries for creating network
 #include <sys/socket.h>
@@ -18,7 +20,16 @@ using namespace std;
 
 #define PORT 8080
 #define MAX_CONNECTIONS 5
-#define BUFFER_SIZE 128
+#define BUFFER_SIZE 8192
+
+// function forward declarations
+void configureServerAdress(struct sockaddr_in &serverAddress);
+void handleGET(int clientSocket, string uri);
+int getContentLength(char buffer[BUFFER_SIZE]);
+string getContent(char buffer[BUFFER_SIZE]);
+void handlePOST(int clientSocket, char buffer[BUFFER_SIZE]);
+void handleClientSocket(int clientSocket);
+unordered_map<string, string> processBody(string body);
 
 void configureServerAdress(struct sockaddr_in &serverAddress)
 {
@@ -64,11 +75,90 @@ void handleGET(int clientSocket, string uri)
     }
 }
 
+void handlePOST(int clientSocket, char buffer[BUFFER_SIZE])
+{
+    string body = getContent(buffer);
+    unordered_map<string, string> formData = processBody(body);
+
+    // debugging
+    //  for (const auto &pair : formData)
+    //  {
+    //      cout << pair.first << " : " << pair.second << endl;
+    //  }
+
+    return;
+}
+
+int getContentLength(char buffer[BUFFER_SIZE])
+{
+    char *contentLengthString = strstr(buffer, "Content-Length");
+    istringstream ContentLengthStream(contentLengthString);
+    string a, b, c, d;
+    ContentLengthStream >> a >> b >> c >> d;
+    int ContentLength = stoi(b);
+    // cout<<a<<b<<c<<d<<endl;
+    return ContentLength;
+}
+
+string getContent(char buffer[BUFFER_SIZE])
+{
+    int contentLength = getContentLength(buffer);
+    char *bodyStart = strstr(buffer, "\r\n\r\n");
+    if (!bodyStart)
+    {
+        return "";
+    }
+    // cout<<body<<endl;
+    bodyStart += 4;
+    string body(bodyStart, contentLength);
+    // cout<<body<<endl;
+    return body;
+}
+
+unordered_map<string, string> processBody(string body)
+{
+    unordered_map<string, string> mp;
+    string key = "", value = "";
+    bool flag = true;
+    for (int i = 0; i < body.size(); i++)
+    {
+        if (flag)
+        {
+            if (body[i] == '=')
+            {
+                flag = false;
+                continue;
+            }
+            key += body[i];
+        }
+        else
+        {
+            if (body[i] == '&')
+            {
+                flag = true;
+                mp[key] = value;
+                key = "";
+                value = "";
+                continue;
+            }
+            else if (body[i] == '+')
+            {
+                value += " ";
+                continue;
+            }
+            value += body[i];
+        }
+    }
+    if (!key.empty())
+        mp[key] = value;
+    return mp;
+}
+
 void handleClientSocket(int clientSocket)
 {
     // debugging
-    pid_t tid = syscall(SYS_gettid);
-    cout << "Thread started with TID: " << tid << endl;
+    // pid_t tid = syscall(SYS_gettid);
+    // cout << "Thread started with TID: " << tid << endl;
 
     char buffer[BUFFER_SIZE];
     int recieved = 0;
@@ -81,21 +171,25 @@ void handleClientSocket(int clientSocket)
     {
         cout << "connection terminated";
     }
-    
+
     istringstream requestStream(buffer);
     string method, uri, httpVersion, host;
     requestStream >> method >> uri >> httpVersion;
-    cout<<buffer;
 
-    cout << host;
-    // if (method != "GET")
-    // {
-    //     string response = "HTTP/1.1 501 Not Implemented\r\n\r\n";
-    //     send(clientSocket, response.c_str(), response.length(), 0);
-    //     close(clientSocket);
-    // }
-    if(method == "GET"){
-        handleGET(clientSocket,uri);
+    // cout<<buffer<<endl;
+
+    if (method == "GET")
+    {
+        handleGET(clientSocket, uri);
+    }
+    else if (method == "POST")
+    {
+        handlePOST(clientSocket, buffer);
+    }
+    else
+    {
+        string response = "HTTP/1.1 501 Not Implemented\r\n\r\n";
+        send(clientSocket, response.c_str(), response.length(), 0);
     }
 
     close(clientSocket);
@@ -132,7 +226,7 @@ int main()
 
     while (true)
     {
-        cout << "waiting" << endl;
+        cout << "waiting\n";
         int clientSocket = accept(tcpSocket, (struct sockaddr *)&serverAddress, &addrlen);
         cout << "accepted\n";
         if (clientSocket == -1)
@@ -140,11 +234,11 @@ int main()
             throw runtime_error("connection not establisihed");
         }
 
-        // cout<<"restarted\n";             //why this run 3 times
-        // handleClientSocket(clientSocket);
-        thread clientThread(handleClientSocket, clientSocket);
-        clientThread.detach();
-        cout << "thread detached\n";
+        handleClientSocket(clientSocket);
+
+        // thread clientThread(handleClientSocket, clientSocket);
+        // clientThread.detach();
+        // cout << "thread detached\n";
     }
     close(tcpSocket);
     exit(0);
